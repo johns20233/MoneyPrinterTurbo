@@ -9,11 +9,46 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse as StarletteJSONResponse
 
 from app.config import config
 from app.models.exception import HttpException
 from app.router import root_api_router
 from app.utils import utils
+
+# Rutas que no requieren API key: documentación Swagger/Redoc y descarga
+# publica de videos ya generados (esas URLs se sirven directamente al
+# usuario final, no forman parte del contrato backend-a-backend).
+PUBLIC_PATH_PREFIXES = ("/docs", "/openapi.json", "/redoc", "/tasks")
+
+
+class ApiKeyMiddleware(BaseHTTPMiddleware):
+    """Valida el header X-API-Key contra la variable de entorno MPT_API_KEY.
+
+    Si MPT_API_KEY no esta seteada, el middleware no bloquea nada (modo
+    abierto). Esto evita romper despliegues existentes que todavia no
+    configuraron la variable, pero se recomienda encarecidamente setearla
+    en produccion.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        api_key = os.getenv("MPT_API_KEY", "")
+
+        if not api_key:
+            return await call_next(request)
+
+        if request.url.path.startswith(PUBLIC_PATH_PREFIXES):
+            return await call_next(request)
+
+        provided_key = request.headers.get("X-API-Key", "")
+        if provided_key != api_key:
+            return StarletteJSONResponse(
+                status_code=401,
+                content={"status": 401, "message": "invalid or missing API key"},
+            )
+
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -69,6 +104,9 @@ def get_application() -> FastAPI:
 
 
 app = get_application()
+
+# Autenticacion por API key (ver ApiKeyMiddleware arriba).
+app.add_middleware(ApiKeyMiddleware)
 
 # Configures the CORS middleware for the FastAPI app
 cors_allowed_origins_str = os.getenv("CORS_ALLOWED_ORIGINS", "")
