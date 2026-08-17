@@ -23,9 +23,9 @@ hide_config = false
 edge_tts_timeout = 30
 tls_verify = true
 
-video_source = "pexels"
+video_source = "pixabay"
 pexels_api_keys = ["${PEXELS_API_KEY}"]
-pixabay_api_keys = []
+pixabay_api_keys = ["${PIXABAY_API_KEY}"]
 coverr_api_keys = []
 twelvelabs_api_keys = []
 twelvelabs_rerank_terms = false
