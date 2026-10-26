@@ -71,6 +71,9 @@ def _cached_source_info(item: MaterialInfo) -> dict | None:
         cached["asset_id"] = str(asset_id)
     if source_page:
         cached["source_page"] = source_page
+    thumbnail = _safe_public_url(source.get("thumbnail"))
+    if thumbnail:
+        cached["thumbnail"] = thumbnail
 
     raw_creator = source.get("creator")
     if isinstance(raw_creator, dict):

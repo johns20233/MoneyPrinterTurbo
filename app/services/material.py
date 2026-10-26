@@ -11,7 +11,7 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from app.config import config
 from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
-from app.services import material_cache, task_artifacts
+from app.services import material_cache, relevance, task_artifacts
 from app.utils import utils
 
 # Thread-safe counter for API key rotation
@@ -350,6 +350,7 @@ def search_videos_pexels(
                             str(v.get("id")) if v.get("id") is not None else None
                         ),
                         "source_page": _safe_public_url(v.get("url")),
+                        "thumbnail": _safe_public_url(v.get("image")),
                         "creator": _creator_info(v.get("user")),
                         "rendition": {
                             "id": (
@@ -915,6 +916,8 @@ def _download_videos_by_script_order(
             valid_video_urls.add(item.url)
             found_duration += item.duration
 
+        # PDFLibero: drop clips whose preview does not show this scene's subject.
+        term_items = relevance.rank_by_relevance(search_term, term_items)
         if term_items:
             candidate_groups.append((search_term, term_items))
 
