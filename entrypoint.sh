@@ -32,6 +32,7 @@ twelvelabs_rerank_terms = false
 match_materials_to_script = false
 visual_relevance_check = ${VISUAL_RELEVANCE_CHECK:-true}
 visual_relevance_model = "${VISUAL_RELEVANCE_MODEL:-gpt-4o-mini}"
+scene_sync_enabled = ${SCENE_SYNC:-true}
 
 sonilo_api_key = ""
 sonilo_base_url = "https://api.sonilo.com"

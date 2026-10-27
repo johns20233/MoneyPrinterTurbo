@@ -9,7 +9,7 @@ import tempfile
 import unicodedata
 from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 from loguru import logger
 import numpy as np
 from moviepy import (
@@ -73,6 +73,8 @@ fps = 30
 # 这里给视频素材多留一个很小的安全余量，避免音频末尾因为帧舍入出现黑屏、
 # 卡顿或最后一小段旁白没有画面的情况。
 _VIDEO_DURATION_SAFETY_MARGIN = 0.1
+# PDFLibero scene sync: slowest playback used to stretch a short clip.
+SCENE_MIN_SPEED = 0.6
 _MIN_MATERIAL_DIMENSION = 480
 # 消息类应用和部分编码器会把画面尺寸向下取整，例如 WhatsApp 会把 9:16 的
 # 素材压成 478x850，比 480 少两个像素。直接按 480 硬卡会让这类素材全部被
@@ -545,6 +547,7 @@ def combine_videos(
     max_clip_duration: int = 5,
     threads: int = 2,
     clip_speed: float = 1.0,
+    scene_durations: Optional[List[float]] = None,
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -582,7 +585,37 @@ def combine_videos(
     processed_clips = []
     subclipped_items = []
     video_duration = 0
-    for video_path in video_paths:
+    use_scenes = bool(scene_durations) and len(scene_durations) == len(video_paths)
+    if use_scenes:
+        # PDFLibero scene sync: clip k covers exactly the narration of its
+        # sentence. A clip shorter than its scene is slowed down (not below
+        # SCENE_MIN_SPEED); any remaining gap is covered by the final loop.
+        normalized_clip_speed = 1.0
+        for video_path, target in zip(video_paths, scene_durations):
+            clip = _open_video_clip_quietly(video_path)
+            clip_duration = clip.duration
+            clip_w, clip_h = clip.size
+            close_clip(clip)
+            if clip_duration <= 0 or target <= 0:
+                continue
+            speed = 1.0
+            source_end = min(target, clip_duration)
+            if clip_duration < target:
+                speed = max(SCENE_MIN_SPEED, clip_duration / target)
+                source_end = min(clip_duration, target * speed)
+            item = SubClippedVideoClip(
+                file_path=video_path,
+                start_time=0,
+                end_time=source_end,
+                width=clip_w,
+                height=clip_h,
+                source_file_path=video_path,
+            )
+            item.scene_target = target
+            item.scene_speed = speed
+            subclipped_items.append(item)
+        logger.info(f"scene sync: {len(subclipped_items)} scenes")
+    for video_path in ([] if use_scenes else video_paths):
         clip = _open_video_clip_quietly(video_path)
         clip_duration = clip.duration
         clip_w, clip_h = clip.size
@@ -612,10 +645,11 @@ def combine_videos(
             if video_concat_mode.value == VideoConcatMode.sequential.value:
                 break
 
-    subclipped_items = _prioritize_unique_source_clips(
-        subclipped_items=subclipped_items,
-        concat_mode=video_concat_mode,
-    )
+    if not use_scenes:
+        subclipped_items = _prioritize_unique_source_clips(
+            subclipped_items=subclipped_items,
+            concat_mode=video_concat_mode,
+        )
         
     logger.debug(f"total subclipped items: {len(subclipped_items)}")
     
@@ -640,6 +674,9 @@ def combine_videos(
             # 浮点误差或异常素材时长的安全兜底，保证最终片段不突破配置上限。
             if normalized_clip_speed != 1.0:
                 clip = clip.with_speed_scaled(normalized_clip_speed)
+            scene_speed = getattr(subclipped_item, "scene_speed", 1.0)
+            if scene_speed != 1.0:
+                clip = clip.with_speed_scaled(scene_speed)
             clip_duration = clip.duration
             # Not all videos are same size, so we need to resize them
             clip_w, clip_h = clip.size
@@ -690,8 +727,9 @@ def combine_videos(
                 shuffle_transition = random.choice(transition_funcs)
                 clip = shuffle_transition(clip)
 
-            if clip.duration > max_clip_duration:
-                clip = clip.subclipped(0, max_clip_duration)
+            clip_limit = getattr(subclipped_item, "scene_target", None) or max_clip_duration
+            if clip.duration > clip_limit:
+                clip = clip.subclipped(0, clip_limit)
                 
             # wirte clip to temp file
             clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"

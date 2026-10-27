@@ -26,6 +26,8 @@ from app.services import (
     video,
     voice,
 )
+from app.services import scenes as scene_service
+from app.services import subtitle as subtitle_service
 from app.services import upload_post
 from app.services import state as sm
 from app.utils import file_security, utils
@@ -563,6 +565,21 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
     return subtitle_path
 
 
+# PDFLibero scene sync: task_id -> (term_count, term_indices) between the
+# materials step and the montage step of the same task.
+_SCENE_PLANS: dict = {}
+_SCENE_PLANS_LOCK = threading.Lock()
+
+
+def _scene_sync_enabled(params) -> bool:
+    if not getattr(params, "scene_sync", False) or params.video_source == "local":
+        return False
+    value = config.app.get("scene_sync_enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def get_video_materials(task_id, params, video_terms, audio_duration):
     if params.video_source == "local":
         logger.info("\n\n## preprocess local materials")
@@ -577,6 +594,26 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             )
             return None
         return [material_info.url for material_info in materials]
+    elif _scene_sync_enabled(params) and video_terms:
+        logger.info(f"\n\n## downloading one clip per scene from {params.video_source}")
+        scene_clips = material.download_videos(
+            task_id=task_id,
+            search_terms=video_terms,
+            source=params.video_source,
+            video_aspect=params.video_aspect,
+            max_clip_duration=params.video_clip_duration,
+            one_per_term=True,
+        )
+        if not scene_clips:
+            _mark_task_failed(
+                task_id,
+                "materials",
+                f"failed to download video materials from {params.video_source}",
+            )
+            return None
+        with _SCENE_PLANS_LOCK:
+            _SCENE_PLANS[task_id] = (len(video_terms), [index for index, _ in scene_clips])
+        return [clip_path for _, clip_path in scene_clips]
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
         # 顺序匹配模式只在用户显式开启时生效。这里强制素材下载按关键词顺序
@@ -626,6 +663,27 @@ def generate_final_videos(
         video_concat_mode = VideoConcatMode.random
     video_transition_mode = params.video_transition_mode
 
+    scene_durations = None
+    with _SCENE_PLANS_LOCK:
+        scene_plan = _SCENE_PLANS.pop(task_id, None)
+    if scene_plan:
+        try:
+            scene_durations = scene_service.scene_durations(
+                script=params.video_script,
+                term_count=scene_plan[0],
+                term_indices=scene_plan[1],
+                srt_entries=subtitle_service.file_to_subtitles(subtitle_path),
+                audio_duration=audio_duration,
+            )
+        except Exception as exc:
+            logger.warning(f"scene timing failed, using fixed clip length: {type(exc).__name__}: {exc}")
+            scene_durations = None
+        if scene_durations and len(scene_durations) == len(downloaded_videos):
+            video_concat_mode = VideoConcatMode.sequential
+            logger.info(f"scene sync durations: {[round(d, 2) for d in scene_durations]}")
+        else:
+            scene_durations = None
+
     _progress = 50
     for i in range(params.video_count):
         index = i + 1
@@ -643,6 +701,7 @@ def generate_final_videos(
             max_clip_duration=params.video_clip_duration,
             threads=params.n_threads,
             clip_speed=params.video_clip_speed,
+            scene_durations=scene_durations,
         )
 
         _progress += 50 / params.video_count / 2

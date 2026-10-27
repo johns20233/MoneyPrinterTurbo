@@ -766,6 +766,7 @@ def download_videos(
     audio_duration: float = 0.0,
     max_clip_duration: int = 5,
     match_script_order: bool = False,
+    one_per_term: bool = False,
 ) -> List[str]:
     provider = "pexels"
     remote_search_videos = search_videos_pexels
@@ -794,6 +795,16 @@ def download_videos(
         material_directory = utils.task_dir(task_id)
     elif material_directory and not os.path.isdir(material_directory):
         material_directory = ""
+
+    if one_per_term:
+        return download_one_clip_per_term(
+            task_id=task_id,
+            search_terms=search_terms,
+            search_videos=search_videos,
+            video_aspect=video_aspect,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+        )
 
     if match_script_order:
         return _download_videos_by_script_order(
@@ -875,6 +886,79 @@ def download_videos(
     logger.success(f"downloaded {len(video_paths)} videos")
     _persist_material_sources(task_id, material_sources)
     return video_paths
+
+
+def download_one_clip_per_term(
+    task_id: str,
+    search_terms: List[str],
+    search_videos,
+    video_aspect: VideoAspect,
+    max_clip_duration: int,
+    material_directory: str,
+    check_relevance: bool = True,
+) -> List[tuple]:
+    """
+    PDFLibero "one scene per sentence": exactly one clip per search term, in
+    order. Returns (term_index, local_path) pairs; a term whose candidates
+    are all rejected or fail to download simply has no pair, and the montage
+    gives its time to the neighbouring scene. A clip already used by an
+    earlier scene is never reused.
+    """
+    logger.info("downloading one approved clip per scene")
+    scenes = []
+    material_sources: list[dict[str, Any]] = []
+    used_urls = set()
+    for index, search_term in enumerate(search_terms):
+        candidates = search_videos(
+            search_term=search_term,
+            minimum_duration=max_clip_duration,
+            video_aspect=video_aspect,
+        )
+        candidates = [item for item in candidates if item.url not in used_urls]
+        if check_relevance:
+            candidates = relevance.rank_by_relevance(search_term, candidates)
+        for item in candidates[:3]:
+            try:
+                saved_video_path = save_video(
+                    video_url=item.url, save_dir=material_directory
+                )
+            except Exception as e:
+                logger.error(
+                    "failed to download scene video: "
+                    f"provider={item.provider}, error={type(e).__name__}, "
+                    f"detail={_redact_request_error(e, item.url)}"
+                )
+                continue
+            if not saved_video_path:
+                continue
+            used_urls.add(item.url)
+            scenes.append((index, saved_video_path))
+            try:
+                material_sources.append(_material_source_record(item, saved_video_path))
+            except Exception as source_error:
+                logger.warning(
+                    "failed to prepare scene material source record: "
+                    f"error={type(source_error).__name__}, detail={source_error}"
+                )
+            break
+        else:
+            logger.warning(f"no usable clip for scene {index + 1}: term={search_term!r}")
+    if not scenes and check_relevance:
+        # Never fail a paid render only because every preview was rejected:
+        # fall back once to the provider order (final moderation still applies).
+        logger.warning("no scene passed the visual check, retrying without it")
+        return download_one_clip_per_term(
+            task_id=task_id,
+            search_terms=search_terms,
+            search_videos=search_videos,
+            video_aspect=video_aspect,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+            check_relevance=False,
+        )
+    logger.success(f"downloaded {len(scenes)}/{len(search_terms)} scene videos")
+    _persist_material_sources(task_id, material_sources)
+    return scenes
 
 
 def _download_videos_by_script_order(

@@ -1,0 +1,156 @@
+"""
+Scene timing for "one scene per sentence" (PDFLibero).
+
+PDFLibero sends one stock search term per script sentence, in order. This
+module turns the real narration timing (from the generated SRT subtitles)
+into one target duration per downloaded clip, so each image appears while
+the voice is saying the sentence it illustrates.
+
+Everything here is pure Python (no MoviePy), so it is unit-tested directly.
+"""
+
+import re
+import unicodedata
+from typing import List, Optional, Sequence, Tuple
+
+MIN_SCENE_SECONDS = 1.5
+
+_SENTENCE_SPLIT = re.compile(r"[.!?¡¿\n]+")
+_SRT_TIME = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
+
+
+def split_sentences(script: str) -> List[str]:
+    """Same rule PDFLibero uses: cut on . ! ? and line breaks."""
+    return [s.strip() for s in _SENTENCE_SPLIT.split(script or "") if s.strip()]
+
+
+def _letters(text: str) -> str:
+    """Comparable text: lowercase letters and digits only, accents removed."""
+    text = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _seconds(stamp: str) -> float:
+    h, m, s, ms = _SRT_TIME.match(stamp.strip()).groups()
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms.ljust(3, "0")[:3]) / 1000
+
+
+def parse_srt_entries(entries: Sequence[Tuple[int, str, str]]) -> List[Tuple[float, float, str]]:
+    """Convert subtitle.file_to_subtitles() output to (start, end, text)."""
+    parsed = []
+    for _, times, text in entries or []:
+        parts = times.split("-->")
+        if len(parts) != 2:
+            continue
+        try:
+            parsed.append((_seconds(parts[0]), _seconds(parts[1]), text))
+        except (AttributeError, ValueError):
+            continue
+    return parsed
+
+
+def sentence_end_times(
+    sentences: List[str],
+    srt: List[Tuple[float, float, str]],
+    audio_duration: float,
+) -> List[float]:
+    """
+    End time of every sentence.
+
+    Subtitle lines and sentences do not split the text at the same places, so
+    both are aligned by cumulative letter count: a sentence ends at the moment
+    the subtitles have spoken as many letters as the script up to that
+    sentence (interpolated inside the subtitle line). Without usable
+    subtitles, time is shared in proportion to sentence length.
+    """
+    lengths = [max(1, len(_letters(s))) for s in sentences]
+    total_letters = sum(lengths)
+    cumulative, acc = [], 0
+    for length in lengths:
+        acc += length
+        cumulative.append(acc)
+
+    spoken = [(start, end, len(_letters(text))) for start, end, text in srt if _letters(text)]
+    srt_letters = sum(n for _, _, n in spoken)
+    if not spoken or srt_letters < total_letters * 0.6:
+        return [audio_duration * c / total_letters for c in cumulative]
+
+    scale = srt_letters / total_letters  # tolerate small text differences
+    ends = []
+    for target in cumulative:
+        goal = target * scale
+        done = 0
+        moment = spoken[-1][1]
+        for start, end, n in spoken:
+            if done + n >= goal:
+                fraction = (goal - done) / n if n else 1.0
+                moment = start + (end - start) * fraction
+                break
+            done += n
+        ends.append(min(moment, audio_duration))
+    ends[-1] = audio_duration
+    return ends
+
+
+def scene_durations(
+    script: str,
+    term_count: int,
+    term_indices: List[int],
+    srt_entries: Sequence[Tuple[int, str, str]],
+    audio_duration: float,
+) -> Optional[List[float]]:
+    """
+    Target duration for every downloaded clip.
+
+    term_indices[k] is the index (in the original term list) of the k-th
+    downloaded clip. Terms without a clip give their time to the previous
+    scene (or the next one at the start), so the timeline never drifts.
+    Returns None when scene timing cannot be built; the caller then keeps
+    the classic fixed-length montage.
+    """
+    sentences = split_sentences(script)
+    if not sentences or term_count <= 0 or not term_indices or audio_duration <= 0:
+        return None
+
+    ends = sentence_end_times(sentences, parse_srt_entries(srt_entries), audio_duration)
+    starts = [0.0] + ends[:-1]
+    count = len(sentences)
+
+    # Time span of every term: one sentence each when counts match; grouped
+    # consecutive sentences when there are fewer terms; split sentences when
+    # there are more terms than sentences.
+    spans = []
+    for i in range(term_count):
+        first = i * count / term_count
+        last = (i + 1) * count / term_count
+
+        def at(position: float) -> float:
+            index = min(int(position), count - 1)
+            within = position - index
+            return starts[index] + (ends[index] - starts[index]) * within
+
+        span_start = at(first) if first < count else audio_duration
+        span_end = audio_duration if i == term_count - 1 else at(last)
+        spans.append(max(0.0, span_end - span_start))
+
+    present = sorted(set(i for i in term_indices if 0 <= i < term_count))
+    if not present:
+        return None
+    owned = {i: spans[i] for i in present}
+    for i in range(term_count):
+        if i in owned:
+            continue
+        previous = [p for p in present if p < i]
+        owner = previous[-1] if previous else present[0]
+        owned[owner] += spans[i]
+
+    durations = [owned[i] for i in term_indices]
+    # Very short scenes flash on screen; borrow time from the longest scene.
+    for k, value in enumerate(durations):
+        if value < MIN_SCENE_SECONDS and len(durations) > 1:
+            donor = max(range(len(durations)), key=lambda j: durations[j])
+            missing = MIN_SCENE_SECONDS - value
+            if durations[donor] - missing >= MIN_SCENE_SECONDS:
+                durations[donor] -= missing
+                durations[k] = MIN_SCENE_SECONDS
+    return durations
