@@ -78,6 +78,7 @@ SCENE_MIN_SPEED = 0.6
 # PDFLibero scene sync: a new shot roughly every 2.8 s, at most 4 per scene.
 SCENE_SHOT_SECONDS = 2.8
 SCENE_MAX_SHOTS = 4
+SCENE_X264_PRESET = "veryfast"
 _MIN_MATERIAL_DIMENSION = 480
 # 消息类应用和部分编码器会把画面尺寸向下取整，例如 WhatsApp 会把 9:16 的
 # 素材压成 478x850，比 480 少两个像素。直接按 480 硬卡会让这类素材全部被
@@ -752,12 +753,16 @@ def combine_videos(
                 
             # wirte clip to temp file
             clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
+            write_kwargs = {"logger": None, "fps": fps}
+            if use_scenes and _get_effective_video_codec(_get_configured_video_codec()) == _DEFAULT_VIDEO_CODEC:
+                # Scene sync makes many short shots: encode them fast so a
+                # 60 s video stays well inside PDFLibero's 15-minute limit.
+                write_kwargs.update(preset=SCENE_X264_PRESET, threads=threads)
             _write_videofile_with_codec_fallback(
                 clip,
                 clip_file,
                 codec=_get_configured_video_codec(),
-                logger=None,
-                fps=fps,
+                **write_kwargs,
             )
 
             # Store clip duration before closing

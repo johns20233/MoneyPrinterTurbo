@@ -18,6 +18,9 @@ from app.utils import utils
 _api_key_counter = 0
 _api_key_lock = threading.Lock()
 
+# PDFLibero scene sync: scenes searched/checked/downloaded in parallel.
+SCENE_DOWNLOAD_WORKERS = 4
+
 
 def _safe_public_url(value: Any) -> str | None:
     """
@@ -331,9 +334,9 @@ def search_videos_pexels(
                 continue
             video_files = v["video_files"]
             # PDFLibero: prefer the exact target size, otherwise the smallest
-            # same-orientation rendition up to 2x the target width (the
-            # montage resizes it). Many relevant Pexels clips only exist in
-            # 1440x2560 or 2160x3840, and the exact-size rule discarded them.
+            # same-orientation rendition up to 1440 px wide for a 1080 target
+            # (the montage resizes it). 4K renditions are skipped: they make
+            # downloads and decoding too slow for the render time limit.
             def _rendition_rank(video):
                 try:
                     w, h = int(video["width"]), int(video["height"])
@@ -343,7 +346,7 @@ def search_videos_pexels(
                     return None
                 if w == video_width and h == video_height:
                     return (0, w)
-                if video_width < w <= video_width * 2:
+                if video_width < w <= int(video_width * 1.34):
                     return (1, w)
                 return None
 
@@ -915,17 +918,17 @@ def download_one_clip_per_term(
     PDFLibero "one scene per sentence": exactly one clip per search term, in
     order. Returns (term_index, local_path) pairs; a term whose candidates
     are all rejected or fail to download simply has no pair, and the montage
-    gives its time to the neighbouring scene. A clip already used by an
+    gives its time to the neighbouring scene. Terms are processed in
+    parallel (search, visual check and download); a clip already used by an
     earlier scene is never reused.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     logger.info("downloading one approved clip per scene")
-    scenes = []
-    material_sources: list[dict[str, Any]] = []
-    used_urls = set()
-    for index, search_term in enumerate(search_terms):
-        candidates = []
-        # PDFLibero: if the full term finds nothing usable, retry once with
-        # its final object words ("installing light bulb" -> "light bulb").
+
+    def scene_candidates(search_term: str) -> List[MaterialInfo]:
+        # If the full term finds nothing usable, retry once with its final
+        # object words ("installing light bulb" -> "light bulb").
         words = search_term.split()
         queries = [search_term] + ([" ".join(words[-2:])] if len(words) > 2 else [])
         for query in queries:
@@ -934,17 +937,23 @@ def download_one_clip_per_term(
                 minimum_duration=max_clip_duration,
                 video_aspect=video_aspect,
             )
-            found = [item for item in found if item.url not in used_urls]
             if check_relevance:
                 found = relevance.rank_by_relevance(query, found)
             if found:
-                candidates = found
-                break
+                return found
+        return []
+
+    def fetch(index_term):
+        index, search_term = index_term
+        try:
+            candidates = scene_candidates(search_term)
+        except Exception as e:
+            logger.error(f"scene search failed: term={search_term!r}, error={type(e).__name__}")
+            return index, []
+        downloaded = []
         for item in candidates[:3]:
             try:
-                saved_video_path = save_video(
-                    video_url=item.url, save_dir=material_directory
-                )
+                saved_video_path = save_video(video_url=item.url, save_dir=material_directory)
             except Exception as e:
                 logger.error(
                     "failed to download scene video: "
@@ -952,20 +961,33 @@ def download_one_clip_per_term(
                     f"detail={_redact_request_error(e, item.url)}"
                 )
                 continue
-            if not saved_video_path:
-                continue
-            used_urls.add(item.url)
-            scenes.append((index, saved_video_path))
-            try:
-                material_sources.append(_material_source_record(item, saved_video_path))
-            except Exception as source_error:
-                logger.warning(
-                    "failed to prepare scene material source record: "
-                    f"error={type(source_error).__name__}, detail={source_error}"
-                )
-            break
-        else:
-            logger.warning(f"no usable clip for scene {index + 1}: term={search_term!r}")
+            if saved_video_path:
+                downloaded.append((item, saved_video_path))
+                break
+        return index, downloaded
+
+    with ThreadPoolExecutor(max_workers=SCENE_DOWNLOAD_WORKERS) as pool:
+        results = sorted(pool.map(fetch, enumerate(search_terms)), key=lambda r: r[0])
+
+    scenes = []
+    material_sources: list[dict[str, Any]] = []
+    used_urls = set()
+    for index, downloaded in results:
+        choice = next(((item, path) for item, path in downloaded if item.url not in used_urls), None)
+        if choice is None:
+            logger.warning(f"no usable clip for scene {index + 1}: term={search_terms[index]!r}")
+            continue
+        item, saved_video_path = choice
+        used_urls.add(item.url)
+        scenes.append((index, saved_video_path))
+        try:
+            material_sources.append(_material_source_record(item, saved_video_path))
+        except Exception as source_error:
+            logger.warning(
+                "failed to prepare scene material source record: "
+                f"error={type(source_error).__name__}, detail={source_error}"
+            )
+
     if not scenes and check_relevance:
         # Never fail a paid render only because every preview was rejected:
         # fall back once to the provider order (final moderation still applies).
