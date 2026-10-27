@@ -25,7 +25,7 @@ def srt_for(lines):
 class TestSceneTiming(unittest.TestCase):
     def test_split_sentences(self):
         self.assertEqual(len(scenes.split_sentences(SCRIPT)), 4)
-        self.assertEqual(scenes.split_sentences("¿Hola? ¡Sí! Fin."), ["Hola", "Sí", "Fin"])
+        self.assertEqual(scenes.split_sentences("¿Hola? ¡Sí! Fin; fin: x."), ["¿Hola", "¡Sí", "Fin", "fin", "x"])
 
     def test_one_term_per_sentence_follows_subtitle_times(self):
         srt = srt_for([
@@ -88,6 +88,29 @@ class TestSceneTiming(unittest.TestCase):
         bad = [(1, "garbage", "x"), (2, "00:00:01,000 --> nope", "y")]
         durations = scenes.scene_durations(SCRIPT, 4, [0, 1, 2, 3], bad, 12.0)
         self.assertAlmostEqual(sum(durations), 12.0, places=2)
+
+    def test_clauses_and_long_sentences_are_split(self):
+        script = (
+            "Ahorrar energía en casa es fundamental para reducir costos y cuidar el medio ambiente. "
+            "Un primer consejo es instalar bombillas de bajo consumo, ya que consumen hasta un 80% menos "
+            "de energía que las tradicionales y tienen una vida útil mucho más larga. "
+            "Además, es importante aprovechar la luz natural durante el día; mantener las cortinas abiertas "
+            "y reorganizar el mobiliario puede ayudar a iluminar los espacios sin necesidad de encender luces."
+        )
+        parts = scenes.split_sentences(script)
+        self.assertEqual(len(parts), 5)
+        self.assertTrue(parts[1].startswith("Un primer consejo"))
+        self.assertTrue(parts[2].startswith("ya que consumen"))
+        self.assertTrue(parts[4].startswith("mantener las cortinas"))
+        self.assertTrue(all(len(p) <= scenes.MAX_PART_CHARS or "," not in p for p in parts))
+
+    def test_more_sentences_than_terms_uses_floor_groups(self):
+        script = ". ".join(f"Frase numero {i}" for i in range(25)) + "."
+        durations = scenes.scene_durations(script, 16, list(range(16)), [], 50.0)
+        self.assertEqual(len(durations), 16)
+        self.assertAlmostEqual(sum(durations), 50.0, places=2)
+        # groups of 1 sentence are shorter than groups of 2 sentences
+        self.assertLess(min(durations), max(durations))
 
 
 if __name__ == "__main__":

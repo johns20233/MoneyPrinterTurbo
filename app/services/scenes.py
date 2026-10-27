@@ -15,13 +15,37 @@ from typing import List, Optional, Sequence, Tuple
 
 MIN_SCENE_SECONDS = 1.5
 
-_SENTENCE_SPLIT = re.compile(r"[.!?¡¿\n]+")
+_SENTENCE_SPLIT = re.compile(r"[.!?;:\n]+")
+MAX_PART_CHARS = 120
 _SRT_TIME = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
 
 
+def _split_long(part: str) -> List[str]:
+    """Split a part longer than MAX_PART_CHARS at the comma nearest its middle."""
+    if len(part) <= MAX_PART_CHARS:
+        return [part]
+    commas = [i for i, ch in enumerate(part) if ch == ","]
+    if not commas:
+        return [part]
+    middle = len(part) / 2
+    cut = min(commas, key=lambda i: (abs(i - middle), i))
+    left, right = part[:cut].strip(), part[cut + 1:].strip()
+    if not left or not right:
+        return [part]
+    return _split_long(left) + _split_long(right)
+
+
 def split_sentences(script: str) -> List[str]:
-    """Same rule PDFLibero uses: cut on . ! ? and line breaks."""
-    return [s.strip() for s in _SENTENCE_SPLIT.split(script or "") if s.strip()]
+    """
+    Narration parts, SAME rule as PDFLibero (stockNarrationScenes):
+    cut on . ! ? ; : and line breaks, then split any part longer than
+    120 characters at the comma nearest its middle (recursively).
+    """
+    parts = []
+    for raw in _SENTENCE_SPLIT.split(script or ""):
+        if raw.strip():
+            parts.extend(_split_long(raw.strip()))
+    return parts
 
 
 def _letters(text: str) -> str:
@@ -120,7 +144,14 @@ def scene_durations(
     # consecutive sentences when there are fewer terms; split sentences when
     # there are more terms than sentences.
     spans = []
-    for i in range(term_count):
+    if count > term_count:
+        # Same grouping as PDFLibero: group i = parts[floor(i*S/T) : floor((i+1)*S/T)].
+        for i in range(term_count):
+            first = (i * count) // term_count
+            last = ((i + 1) * count) // term_count
+            span_end = audio_duration if i == term_count - 1 else ends[last - 1]
+            spans.append(max(0.0, span_end - starts[first]))
+    for i in ([] if count > term_count else range(term_count)):
         first = i * count / term_count
         last = (i + 1) * count / term_count
 
