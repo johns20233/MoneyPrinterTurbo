@@ -330,40 +330,54 @@ def search_videos_pexels(
             if duration < minimum_duration:
                 continue
             video_files = v["video_files"]
-            # loop through each url to determine the best quality
-            for video in video_files:
+            # PDFLibero: prefer the exact target size, otherwise the smallest
+            # same-orientation rendition up to 2x the target width (the
+            # montage resizes it). Many relevant Pexels clips only exist in
+            # 1440x2560 or 2160x3840, and the exact-size rule discarded them.
+            def _rendition_rank(video):
+                try:
+                    w, h = int(video["width"]), int(video["height"])
+                except (KeyError, TypeError, ValueError):
+                    return None
+                if not _matches_video_aspect(w, h, aspect):
+                    return None
+                if w == video_width and h == video_height:
+                    return (0, w)
+                if video_width < w <= video_width * 2:
+                    return (1, w)
+                return None
+
+            ranked = sorted(
+                (pair for pair in ((_rendition_rank(f), f) for f in video_files) if pair[0] is not None),
+                key=lambda pair: pair[0],
+            )
+            for _, video in ranked[:1]:
                 w = int(video["width"])
                 h = int(video["height"])
-                if (
-                    _matches_video_aspect(w, h, aspect)
-                    and w == video_width
-                    and h == video_height
-                ):
-                    item = MaterialInfo()
-                    item.provider = "pexels"
-                    item.url = video["link"]
-                    item.duration = duration
-                    item.source_info = {
-                        "provider": "pexels",
-                        "search_term": search_term,
-                        "asset_id": (
-                            str(v.get("id")) if v.get("id") is not None else None
+                item = MaterialInfo()
+                item.provider = "pexels"
+                item.url = video["link"]
+                item.duration = duration
+                item.source_info = {
+                    "provider": "pexels",
+                    "search_term": search_term,
+                    "asset_id": (
+                        str(v.get("id")) if v.get("id") is not None else None
+                    ),
+                    "source_page": _safe_public_url(v.get("url")),
+                    "thumbnail": _safe_public_url(v.get("image")),
+                    "creator": _creator_info(v.get("user")),
+                    "rendition": {
+                        "id": (
+                            str(video.get("id"))
+                            if video.get("id") is not None
+                            else None
                         ),
-                        "source_page": _safe_public_url(v.get("url")),
-                        "thumbnail": _safe_public_url(v.get("image")),
-                        "creator": _creator_info(v.get("user")),
-                        "rendition": {
-                            "id": (
-                                str(video.get("id"))
-                                if video.get("id") is not None
-                                else None
-                            ),
-                            "width": w,
-                            "height": h,
-                        },
-                    }
-                    video_items.append(item)
-                    break
+                        "width": w,
+                        "height": h,
+                    },
+                }
+                video_items.append(item)
         return video_items
     except Exception as e:
         logger.error(
@@ -909,14 +923,23 @@ def download_one_clip_per_term(
     material_sources: list[dict[str, Any]] = []
     used_urls = set()
     for index, search_term in enumerate(search_terms):
-        candidates = search_videos(
-            search_term=search_term,
-            minimum_duration=max_clip_duration,
-            video_aspect=video_aspect,
-        )
-        candidates = [item for item in candidates if item.url not in used_urls]
-        if check_relevance:
-            candidates = relevance.rank_by_relevance(search_term, candidates)
+        candidates = []
+        # PDFLibero: if the full term finds nothing usable, retry once with
+        # its final object words ("installing light bulb" -> "light bulb").
+        words = search_term.split()
+        queries = [search_term] + ([" ".join(words[-2:])] if len(words) > 2 else [])
+        for query in queries:
+            found = search_videos(
+                search_term=query,
+                minimum_duration=max_clip_duration,
+                video_aspect=video_aspect,
+            )
+            found = [item for item in found if item.url not in used_urls]
+            if check_relevance:
+                found = relevance.rank_by_relevance(query, found)
+            if found:
+                candidates = found
+                break
         for item in candidates[:3]:
             try:
                 saved_video_path = save_video(
