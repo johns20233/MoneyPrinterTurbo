@@ -26,6 +26,7 @@ from app.services import (
     video,
     voice,
 )
+from app.services import deadline
 from app.services import scenes as scene_service
 from app.services import subtitle as subtitle_service
 from app.services import upload_post
@@ -703,6 +704,7 @@ def generate_final_videos(
             clip_speed=params.video_clip_speed,
             scene_durations=scene_durations,
         )
+        deadline.check("final video generation")
 
         _progress += 50 / params.video_count / 2
         sm.state.update_task(task_id, progress=_progress)
@@ -1340,6 +1342,12 @@ def start(
     voice_preview: dict | None = None,
 ):
     """执行任务流水线，并确保未预期异常也会转换成可查询的失败状态。"""
+    # PDFLibero: scene-sync renders get a time budget so an abandoned task
+    # (PDFLibero refunds after 15 min) stops instead of blocking the server.
+    if getattr(params, "scene_sync", False):
+        deadline.set_deadline(float(config.app.get("task_max_seconds", 870) or 0))
+    else:
+        deadline.clear()
     try:
         return _run_pipeline(
             task_id,
@@ -1356,6 +1364,8 @@ def start(
             "pipeline",
             f"{type(exc).__name__}: {exc}",
         )
+    finally:
+        deadline.clear()
 
 
 if __name__ == "__main__":

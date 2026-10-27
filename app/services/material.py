@@ -11,7 +11,7 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from app.config import config
 from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
-from app.services import material_cache, relevance, task_artifacts
+from app.services import deadline, material_cache, relevance, task_artifacts
 from app.utils import utils
 
 # Thread-safe counter for API key rotation

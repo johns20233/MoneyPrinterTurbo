@@ -35,6 +35,7 @@ from app.models.schema import (
     VideoTransitionMode,
 )
 from app.services import bgm as bgm_service
+from app.services import deadline
 from app.services.utils import video_effects
 from app.utils import file_security, utils
 
@@ -674,6 +675,7 @@ def combine_videos(
     for i, subclipped_item in enumerate(subclipped_items):
         if video_duration >= required_video_duration:
             break
+        deadline.check("clip processing")
         
         logger.debug(
             f"processing clip {i+1}: {subclipped_item.width}x{subclipped_item.height}, "
