@@ -80,6 +80,18 @@ SCENE_MIN_SPEED = 0.6
 SCENE_SHOT_SECONDS = 2.8
 SCENE_MAX_SHOTS = 4
 SCENE_X264_PRESET = "veryfast"
+
+
+def _final_encode_kwargs(params) -> dict:
+    """PDFLibero scene renders: fast preset and all CPUs for the final encode."""
+    if getattr(params, "scene_sync", False) and _get_effective_video_codec(_get_configured_video_codec()) == _DEFAULT_VIDEO_CODEC:
+        return {"threads": _scene_threads(), "preset": SCENE_X264_PRESET}
+    return {"threads": params.n_threads or 2}
+
+
+def _scene_threads() -> int:
+    """Encoder threads for PDFLibero scene renders: use the machine's CPUs."""
+    return max(2, min(os.cpu_count() or 2, 8))
 _MIN_MATERIAL_DIMENSION = 480
 # 消息类应用和部分编码器会把画面尺寸向下取整，例如 WhatsApp 会把 9:16 的
 # 素材压成 478x850，比 480 少两个像素。直接按 480 硬卡会让这类素材全部被
@@ -342,6 +354,7 @@ def concat_video_clips_with_ffmpeg(
     threads: int,
     output_dir: str,
     max_duration: float | None = None,
+    copy_streams: bool = False,
 ):
     concat_list_file = os.path.join(output_dir, "ffmpeg-concat-list.txt")
     with open(concat_list_file, "w", encoding="utf-8") as fp:
@@ -358,13 +371,14 @@ def concat_video_clips_with_ffmpeg(
             "0",
             "-i",
             concat_list_file,
-            "-c:v",
-            codec,
-            "-threads",
-            str(threads or 2),
-            "-pix_fmt",
-            "yuv420p",
         ]
+        if codec == "copy":
+            # PDFLibero scene sync: every shot was just encoded with the same
+            # settings, and the final step re-encodes anyway (subtitles), so
+            # joining without re-encoding saves several minutes.
+            command.extend(["-c", "copy"])
+        else:
+            command.extend(["-c:v", codec, "-threads", str(threads or 2), "-pix_fmt", "yuv420p"])
         if max_duration is not None and max_duration > 0:
             command.extend(["-t", f"{max_duration:.3f}"])
         command.append(output_file)
@@ -386,6 +400,11 @@ def concat_video_clips_with_ffmpeg(
         return codec
 
     try:
+        if copy_streams:
+            try:
+                return run_concat("copy")
+            except Exception as exc:
+                logger.warning(f"stream-copy concat failed, re-encoding: {exc}")
         effective_codec = _get_effective_video_codec()
         try:
             return run_concat(effective_codec)
@@ -759,7 +778,7 @@ def combine_videos(
             if use_scenes and _get_effective_video_codec(_get_configured_video_codec()) == _DEFAULT_VIDEO_CODEC:
                 # Scene sync makes many short shots: encode them fast so a
                 # 60 s video stays well inside PDFLibero's 15-minute limit.
-                write_kwargs.update(preset=SCENE_X264_PRESET, threads=threads)
+                write_kwargs.update(preset=SCENE_X264_PRESET, threads=_scene_threads())
             _write_videofile_with_codec_fallback(
                 clip,
                 clip_file,
@@ -817,6 +836,7 @@ def combine_videos(
         threads=threads,
         output_dir=output_dir,
         max_duration=audio_duration,
+        copy_streams=use_scenes,
     )
     
     # clean temp files
@@ -1324,9 +1344,9 @@ def generate_video(
             audio_fps=output_audio_fps,
             audio_bitrate=audio_bitrate,
             temp_audiofile_path=_get_temp_audio_dir(output_dir),
-            threads=params.n_threads or 2,
             logger=None,
             fps=fps,
+            **_final_encode_kwargs(params),
         )
         return bgm_mix_succeeded
 
