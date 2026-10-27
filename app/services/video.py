@@ -36,6 +36,7 @@ from app.models.schema import (
 )
 from app.services import bgm as bgm_service
 from app.services import deadline
+from app.services import scene_render
 from app.services.utils import video_effects
 from app.utils import file_security, utils
 
@@ -572,6 +573,7 @@ def combine_videos(
     threads: int = 2,
     clip_speed: float = 1.0,
     scene_durations: Optional[List[float]] = None,
+    scene_groups: Optional[List[List[str]]] = None,
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -605,6 +607,25 @@ def combine_videos(
 
     aspect = VideoAspect(video_aspect)
     video_width, video_height = aspect.to_resolution()
+
+    if scene_groups and scene_durations and len(scene_groups) == len(scene_durations):
+        # PDFLibero professional montage: several different clips per scene,
+        # camera moves and transitions, all in FFmpeg. Any failure falls back
+        # to the classic montage below with the best clip of every scene.
+        try:
+            return scene_render.render(
+                output_file=combined_video_path,
+                scene_clips=scene_groups,
+                scene_durations=scene_durations,
+                width=video_width,
+                height=video_height,
+                total_duration=audio_duration,
+            )
+        except deadline.TaskDeadlineExceeded:
+            raise
+        except Exception as exc:
+            logger.warning(f"scene montage failed, using classic montage: {type(exc).__name__}: {exc}")
+            video_paths = [group[0] for group in scene_groups]
 
     processed_clips = []
     subclipped_items = []

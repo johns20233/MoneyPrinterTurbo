@@ -443,7 +443,46 @@ def tts(
         else:
             logger.error(f"Invalid chatterbox voice name format: {voice_name}")
             return None
+    natural = natural_voice_for(voice_name)
+    if natural:
+        sub_maker = azure_tts_v2(text, f"{natural}-V2", voice_file, voice_rate=voice_rate)
+        if sub_maker is not None and os.path.exists(voice_file) and os.path.getsize(voice_file) > 0:
+            logger.info(f"natural voice used: {voice_name} -> {natural}")
+            return sub_maker
+        logger.warning(f"natural voice failed, using the standard voice: {voice_name}")
     return azure_tts_v1(text, voice_name, voice_rate, voice_file)
+
+
+# PDFLibero: more fluid, less robotic narration. A standard Edge voice is
+# replaced by the Azure multilingual voice of the same language and gender
+# when Azure is configured. Any failure falls back to the standard voice.
+NATURAL_VOICES = {
+    ("es-ES", "Male"): "es-ES-TristanMultilingualNeural",
+    ("es-ES", "Female"): "es-ES-XimenaMultilingualNeural",
+    ("en-US", "Male"): "en-US-AndrewMultilingualNeural",
+    ("en-US", "Female"): "en-US-AvaMultilingualNeural",
+    ("fr-FR", "Male"): "fr-FR-RemyMultilingualNeural",
+    ("fr-FR", "Female"): "fr-FR-VivienneMultilingualNeural",
+    ("de-DE", "Male"): "de-DE-FlorianMultilingualNeural",
+    ("de-DE", "Female"): "de-DE-SeraphinaMultilingualNeural",
+    ("it-IT", "Male"): "it-IT-GiuseppeMultilingualNeural",
+    ("pt-BR", "Female"): "pt-BR-ThalitaMultilingualNeural",
+}
+
+
+def natural_voice_for(voice_name: str) -> str | None:
+    value = config.app.get("natural_voice", False)
+    if isinstance(value, str):
+        value = value.strip().lower() in {"1", "true", "yes", "on"}
+    if not value or not voice_name or "Multilingual" in voice_name:
+        return None
+    if not config.azure.get("speech_key", "") or not config.azure.get("speech_region", ""):
+        return None
+    parts = voice_name.split("-")
+    if len(parts) < 3:
+        return None
+    gender = next((v.get("gender") for v in _load_azure_voices() if v.get("name") == voice_name), None)
+    return NATURAL_VOICES.get(("-".join(parts[:2]), gender))
 
 
 def convert_rate_to_percent(rate: float) -> str:

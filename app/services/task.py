@@ -581,6 +581,23 @@ def _scene_sync_enabled(params) -> bool:
     return bool(value)
 
 
+def _scene_clips_per_term() -> int:
+    """Different clips per scene for the FFmpeg scene montage (1 = classic)."""
+    if not _scene_render_enabled():
+        return 1
+    try:
+        return max(1, min(4, int(config.app.get("scene_clips_per_term", 3))))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _scene_render_enabled() -> bool:
+    value = config.app.get("scene_render_enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def get_video_materials(task_id, params, video_terms, audio_duration):
     if params.video_source == "local":
         logger.info("\n\n## preprocess local materials")
@@ -604,6 +621,7 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             video_aspect=params.video_aspect,
             max_clip_duration=params.video_clip_duration,
             one_per_term=True,
+            clips_per_term=_scene_clips_per_term(),
         )
         if not scene_clips:
             _mark_task_failed(
@@ -667,23 +685,38 @@ def generate_final_videos(
     scene_durations = None
     with _SCENE_PLANS_LOCK:
         scene_plan = _SCENE_PLANS.pop(task_id, None)
+    scene_groups = None
     if scene_plan:
+        # Clips arrive grouped by scene: [(term_index, path), ...] in order.
+        term_indices = scene_plan[1]
+        unique_terms = list(dict.fromkeys(term_indices))
+        groups = {index: [] for index in unique_terms}
+        for index, clip_path in zip(term_indices, downloaded_videos):
+            groups[index].append(clip_path)
         try:
             scene_durations = scene_service.scene_durations(
                 script=params.video_script,
                 term_count=scene_plan[0],
-                term_indices=scene_plan[1],
+                term_indices=unique_terms,
                 srt_entries=subtitle_service.file_to_subtitles(subtitle_path),
                 audio_duration=audio_duration,
             )
         except Exception as exc:
             logger.warning(f"scene timing failed, using fixed clip length: {type(exc).__name__}: {exc}")
             scene_durations = None
-        if scene_durations and len(scene_durations) == len(downloaded_videos):
+        if scene_durations and len(scene_durations) == len(unique_terms):
             video_concat_mode = VideoConcatMode.sequential
-            logger.info(f"scene sync durations: {[round(d, 2) for d in scene_durations]}")
+            scene_groups = [groups[index] for index in unique_terms]
+            if len(term_indices) != len(unique_terms):
+                # Classic fallback montage uses the best clip of every scene.
+                downloaded_videos = [group[0] for group in scene_groups]
+            logger.info(
+                f"scene sync durations: {[round(d, 2) for d in scene_durations]}, "
+                f"clips per scene: {[len(g) for g in scene_groups]}"
+            )
         else:
             scene_durations = None
+            downloaded_videos = list(dict.fromkeys(downloaded_videos))
 
     _progress = 50
     for i in range(params.video_count):
@@ -703,6 +736,7 @@ def generate_final_videos(
             threads=params.n_threads,
             clip_speed=params.video_clip_speed,
             scene_durations=scene_durations,
+            scene_groups=scene_groups if _scene_render_enabled() else None,
         )
         deadline.check("final video generation")
 

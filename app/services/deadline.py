@@ -29,3 +29,19 @@ def check(stage: str = "") -> None:
     deadline = getattr(_local, "deadline", None)
     if deadline is not None and time.monotonic() > deadline:
         raise TaskDeadlineExceeded(f"task time budget exceeded during {stage or 'processing'}")
+
+
+def remaining() -> float | None:
+    """Seconds left in the budget (None when the task has no budget)."""
+    deadline = getattr(_local, "deadline", None)
+    return None if deadline is None else max(0.0, deadline - time.monotonic())
+
+
+def get() -> float | None:
+    """The raw deadline, so worker threads can inherit it."""
+    return getattr(_local, "deadline", None)
+
+
+def adopt(value: float | None) -> None:
+    """Use a deadline captured in another thread."""
+    _local.deadline = value

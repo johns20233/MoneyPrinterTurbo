@@ -19,7 +19,9 @@ _api_key_counter = 0
 _api_key_lock = threading.Lock()
 
 # PDFLibero scene sync: scenes searched/checked/downloaded in parallel.
-SCENE_DOWNLOAD_WORKERS = 4
+SCENE_DOWNLOAD_WORKERS = 6
+# PDFLibero scene sync: extra clips of a scene need a clearly relevant preview.
+SECOND_CLIP_MIN_SCORE = 7
 
 
 def _safe_public_url(value: Any) -> str | None:
@@ -784,6 +786,7 @@ def download_videos(
     max_clip_duration: int = 5,
     match_script_order: bool = False,
     one_per_term: bool = False,
+    clips_per_term: int = 1,
 ) -> List[str]:
     provider = "pexels"
     remote_search_videos = search_videos_pexels
@@ -821,6 +824,7 @@ def download_videos(
             video_aspect=video_aspect,
             max_clip_duration=max_clip_duration,
             material_directory=material_directory,
+            clips_per_term=clips_per_term,
         )
 
     if match_script_order:
@@ -913,10 +917,12 @@ def download_one_clip_per_term(
     max_clip_duration: int,
     material_directory: str,
     check_relevance: bool = True,
+    clips_per_term: int = 1,
 ) -> List[tuple]:
     """
-    PDFLibero "one scene per sentence": exactly one clip per search term, in
-    order. Returns (term_index, local_path) pairs; a term whose candidates
+    PDFLibero "one scene per sentence": up to clips_per_term DIFFERENT clips
+    per search term (the best one first), in order; one (term_index, path)
+    pair per clip. Extra clips must score at least SECOND_CLIP_MIN_SCORE. Returns (term_index, local_path) pairs; a term whose candidates
     are all rejected or fail to download simply has no pair, and the montage
     gives its time to the neighbouring scene. Terms are processed in
     parallel (search, visual check and download); a clip already used by an
@@ -951,7 +957,13 @@ def download_one_clip_per_term(
             logger.error(f"scene search failed: term={search_term!r}, error={type(e).__name__}")
             return index, []
         downloaded = []
-        for item in candidates[:3]:
+        wanted = max(1, clips_per_term)
+        for item in candidates[: wanted + 3]:
+            if len(downloaded) >= wanted:
+                break
+            score = (item.source_info or {}).get("relevance_score") if isinstance(item.source_info, dict) else None
+            if downloaded and score is not None and score < SECOND_CLIP_MIN_SCORE:
+                break
             try:
                 saved_video_path = save_video(video_url=item.url, save_dir=material_directory)
             except Exception as e:
@@ -963,7 +975,8 @@ def download_one_clip_per_term(
                 continue
             if saved_video_path:
                 downloaded.append((item, saved_video_path))
-                break
+                if wanted == 1:
+                    break
         return index, downloaded
 
     with ThreadPoolExecutor(max_workers=SCENE_DOWNLOAD_WORKERS) as pool:
@@ -973,20 +986,21 @@ def download_one_clip_per_term(
     material_sources: list[dict[str, Any]] = []
     used_urls = set()
     for index, downloaded in results:
-        choice = next(((item, path) for item, path in downloaded if item.url not in used_urls), None)
-        if choice is None:
+        chosen = [(item, path) for item, path in downloaded if item.url not in used_urls]
+        chosen = chosen[: max(1, clips_per_term)]
+        if not chosen:
             logger.warning(f"no usable clip for scene {index + 1}: term={search_terms[index]!r}")
             continue
-        item, saved_video_path = choice
-        used_urls.add(item.url)
-        scenes.append((index, saved_video_path))
-        try:
-            material_sources.append(_material_source_record(item, saved_video_path))
-        except Exception as source_error:
-            logger.warning(
-                "failed to prepare scene material source record: "
-                f"error={type(source_error).__name__}, detail={source_error}"
-            )
+        for item, saved_video_path in chosen:
+            used_urls.add(item.url)
+            scenes.append((index, saved_video_path))
+            try:
+                material_sources.append(_material_source_record(item, saved_video_path))
+            except Exception as source_error:
+                logger.warning(
+                    "failed to prepare scene material source record: "
+                    f"error={type(source_error).__name__}, detail={source_error}"
+                )
 
     if not scenes and check_relevance:
         # Never fail a paid render only because every preview was rejected:
@@ -1000,8 +1014,11 @@ def download_one_clip_per_term(
             max_clip_duration=max_clip_duration,
             material_directory=material_directory,
             check_relevance=False,
+            clips_per_term=clips_per_term,
         )
-    logger.success(f"downloaded {len(scenes)}/{len(search_terms)} scene videos")
+    logger.success(
+        f"downloaded {len(scenes)} clips for {len(set(i for i, _ in scenes))}/{len(search_terms)} scenes"
+    )
     _persist_material_sources(task_id, material_sources)
     return scenes
 
