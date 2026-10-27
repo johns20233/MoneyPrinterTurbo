@@ -143,3 +143,20 @@ def zoomout_transition(clip: Clip, t: float) -> Clip:
         return _zoom_frame(get_frame(current_time), scale_factor)
 
     return clip.transform(scale_effect)
+
+
+# PDFLibero scene sync: gentle Ken Burns move used on every shot (hard cuts,
+# continuous slow motion), the usual look of professional short-form video.
+SCENE_KEN_BURNS_SCALE = 1.08
+
+
+def ken_burns(clip: Clip, zoom_in: bool = True, max_scale: float = SCENE_KEN_BURNS_SCALE) -> Clip:
+    duration = max(clip.duration, 0.001)
+
+    def scale_effect(get_frame, current_time: float):
+        progress = min(max(current_time / duration, 0), 1)
+        if not zoom_in:
+            progress = 1 - progress
+        return _zoom_frame(get_frame(current_time), 1 + (max_scale - 1) * progress)
+
+    return clip.transform(scale_effect)
