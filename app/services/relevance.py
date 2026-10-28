@@ -33,12 +33,15 @@ REQUEST_TIMEOUT_SECONDS = 20
 MIN_SCORE = 6
 
 _PROMPT = (
-    "You review stock video preview images for a narrated video. "
-    "Scene search term: {term!r}. "
-    "For each numbered image, score 0-10 how clearly it shows that subject or action, "
-    "as a viewer would understand it (an audio meter is NOT an electricity meter; a dam is "
-    "NOT home insulation; food is NOT a light bulb). Give 0-3 if the image is dark, blurry, "
-    "mostly empty, abstract, or unrelated. Answer JSON only: "
+    "You review stock video preview images for a narrated vertical video. "
+    "Scene search term: {term!r}.{context} "
+    "For each numbered image, score 0-10 how clearly it shows what this scene is about, "
+    "as a viewer hearing the narration would understand it (an audio meter is NOT an electricity meter; "
+    "a dam is NOT home insulation; food is NOT a light bulb; a car dashboard is NOT a home meter). "
+    "Give 0-3 if the image is dark, blurry, mostly empty, abstract, or unrelated. "
+    "Give 0-4 if the main element is a sign, label, logo, slogan, banner or large text, "
+    "or a generic activity that does not show the specific action or object described. "
+    "Answer JSON only: "
     '{{"scores": [s1, s2, ...]}} with exactly {count} integers in image order.'
 )
 
@@ -75,7 +78,7 @@ def _parse_scores(text: str, count: int) -> List[int] | None:
     return parsed
 
 
-def _ask_vision(term: str, urls: List[str]) -> List[int] | None:
+def _ask_vision(term: str, urls: List[str], context: str = "") -> List[int] | None:
     api_key = config.app.get("openai_api_key", "")
     if not api_key:
         return None
@@ -87,7 +90,8 @@ def _ask_vision(term: str, urls: List[str]) -> List[int] | None:
         timeout=REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
     )
-    content = [{"type": "text", "text": _PROMPT.format(term=term, count=len(urls))}]
+    narration = f" Narration of this scene: {context[:400]!r}." if context else ""
+    content = [{"type": "text", "text": _PROMPT.format(term=term, context=narration, count=len(urls))}]
     for url in urls:
         content.append({"type": "image_url", "image_url": {"url": url, "detail": "low"}})
     response = client.chat.completions.create(
@@ -100,7 +104,7 @@ def _ask_vision(term: str, urls: List[str]) -> List[int] | None:
     return _parse_scores(text or "", len(urls))
 
 
-def rank_by_relevance(search_term: str, items: List[MaterialInfo]) -> List[MaterialInfo]:
+def rank_by_relevance(search_term: str, items: List[MaterialInfo], context: str = "") -> List[MaterialInfo]:
     """Return only approved clips, best-first. Fail open (unchanged) on any error."""
     if not items or not _enabled():
         return items
@@ -110,7 +114,7 @@ def rank_by_relevance(search_term: str, items: List[MaterialInfo]) -> List[Mater
         return items
 
     try:
-        scores = _ask_vision(search_term, [_thumbnail(item) for item in reviewed])
+        scores = _ask_vision(search_term, [_thumbnail(item) for item in reviewed], context)
     except Exception as exc:
         logger.warning(
             "visual relevance check failed, keeping provider order: "

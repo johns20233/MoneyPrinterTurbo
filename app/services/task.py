@@ -581,6 +581,13 @@ def _scene_sync_enabled(params) -> bool:
     return bool(value)
 
 
+def _config_flag(name: str, default: bool) -> bool:
+    value = config.app.get(name, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _scene_clips_per_term() -> int:
     """Different clips per scene for the FFmpeg scene montage (1 = classic)."""
     if not _scene_render_enabled():
@@ -622,6 +629,7 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             max_clip_duration=params.video_clip_duration,
             one_per_term=True,
             clips_per_term=_scene_clips_per_term(),
+            contexts=scene_service.narration_for_terms(params.video_script or "", len(video_terms)),
         )
         if not scene_clips:
             _mark_task_failed(
@@ -717,6 +725,14 @@ def generate_final_videos(
         else:
             scene_durations = None
             downloaded_videos = list(dict.fromkeys(downloaded_videos))
+
+    if scene_durations and _config_flag("subtitle_box", True):
+        # PDFLibero scene videos: subtitles always readable on light images
+        # (rounded semi-transparent dark box behind white text).
+        if not params.text_background_color:
+            params.text_background_color = "#000000"
+        params.rounded_subtitle_background = True
+        params.stroke_width = max(float(params.stroke_width or 0), 2.0)
 
     _progress = 50
     for i in range(params.video_count):

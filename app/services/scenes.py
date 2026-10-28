@@ -185,3 +185,24 @@ def scene_durations(
                 durations[donor] -= missing
                 durations[k] = MIN_SCENE_SECONDS
     return durations
+
+
+def narration_for_terms(script: str, term_count: int) -> List[str]:
+    """
+    Narration text each search term illustrates (same grouping as
+    scene_durations / PDFLibero). Used to judge stock clips against what the
+    narrator actually says, not only against the short search term.
+    """
+    parts = split_sentences(script)
+    if not parts or term_count <= 0:
+        return [""] * max(0, term_count)
+    count = len(parts)
+    texts = []
+    for i in range(term_count):
+        if count > term_count:
+            first = (i * count) // term_count
+            last = ((i + 1) * count) // term_count
+            texts.append(" ".join(parts[first:last]))
+        else:
+            texts.append(parts[min(count - 1, (i * count) // term_count)])
+    return texts

@@ -112,6 +112,14 @@ class TestSceneTiming(unittest.TestCase):
         # groups of 1 sentence are shorter than groups of 2 sentences
         self.assertLess(min(durations), max(durations))
 
+    def test_narration_for_terms_follows_grouping(self):
+        texts = scenes.narration_for_terms(SCRIPT, 2)
+        self.assertEqual(len(texts), 2)
+        self.assertTrue(texts[0].startswith("Ahorrar energía"))
+        self.assertTrue(texts[1].startswith("Mantener las cortinas"))
+        self.assertEqual(scenes.narration_for_terms(SCRIPT, 4)[3], "Desconecta los electrodomésticos que no uses")
+        self.assertEqual(len(scenes.narration_for_terms(SCRIPT, 6)), 6)
+
 
 if __name__ == "__main__":
     unittest.main()

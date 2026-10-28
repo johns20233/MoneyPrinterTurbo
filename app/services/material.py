@@ -2,7 +2,7 @@ import os
 import random
 import threading
 from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -787,6 +787,7 @@ def download_videos(
     match_script_order: bool = False,
     one_per_term: bool = False,
     clips_per_term: int = 1,
+    contexts: Optional[List[str]] = None,
 ) -> List[str]:
     provider = "pexels"
     remote_search_videos = search_videos_pexels
@@ -825,6 +826,7 @@ def download_videos(
             max_clip_duration=max_clip_duration,
             material_directory=material_directory,
             clips_per_term=clips_per_term,
+            contexts=contexts,
         )
 
     if match_script_order:
@@ -918,6 +920,7 @@ def download_one_clip_per_term(
     material_directory: str,
     check_relevance: bool = True,
     clips_per_term: int = 1,
+    contexts: Optional[List[str]] = None,
 ) -> List[tuple]:
     """
     PDFLibero "one scene per sentence": up to clips_per_term DIFFERENT clips
@@ -932,7 +935,7 @@ def download_one_clip_per_term(
 
     logger.info("downloading one approved clip per scene")
 
-    def scene_candidates(search_term: str) -> List[MaterialInfo]:
+    def scene_candidates(search_term: str, context: str = "") -> List[MaterialInfo]:
         # If the full term finds nothing usable, retry once with its final
         # object words ("installing light bulb" -> "light bulb").
         words = search_term.split()
@@ -944,7 +947,7 @@ def download_one_clip_per_term(
                 video_aspect=video_aspect,
             )
             if check_relevance:
-                found = relevance.rank_by_relevance(query, found)
+                found = relevance.rank_by_relevance(query, found, context)
             if found:
                 return found
         return []
@@ -952,7 +955,8 @@ def download_one_clip_per_term(
     def fetch(index_term):
         index, search_term = index_term
         try:
-            candidates = scene_candidates(search_term)
+            context = contexts[index] if contexts and index < len(contexts) else ""
+            candidates = scene_candidates(search_term, context)
         except Exception as e:
             logger.error(f"scene search failed: term={search_term!r}, error={type(e).__name__}")
             return index, []
@@ -1015,6 +1019,7 @@ def download_one_clip_per_term(
             material_directory=material_directory,
             check_relevance=False,
             clips_per_term=clips_per_term,
+            contexts=contexts,
         )
     logger.success(
         f"downloaded {len(scenes)} clips for {len(set(i for i, _ in scenes))}/{len(search_terms)} scenes"
