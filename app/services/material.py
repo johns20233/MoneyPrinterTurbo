@@ -999,7 +999,15 @@ def download_one_clip_per_term(
             used_urls.add(item.url)
             scenes.append((index, saved_video_path))
             try:
-                material_sources.append(_material_source_record(item, saved_video_path))
+                record = _material_source_record(item, saved_video_path)
+                # Audit trail: which narration scene (term) this clip illustrates
+                # and the visual relevance score it received.
+                record["scene_index"] = index
+                record["scene_term"] = search_terms[index]
+                score = (item.source_info or {}).get("relevance_score") if isinstance(item.source_info, dict) else None
+                if isinstance(score, int):
+                    record["relevance_score"] = score
+                material_sources.append(record)
             except Exception as source_error:
                 logger.warning(
                     "failed to prepare scene material source record: "
