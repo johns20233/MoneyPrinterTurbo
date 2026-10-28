@@ -586,7 +586,7 @@ def _scene_clips_per_term() -> int:
     if not _scene_render_enabled():
         return 1
     try:
-        return max(1, min(4, int(config.app.get("scene_clips_per_term", 3))))
+        return max(1, min(4, int(config.app.get("scene_clips_per_term", 4))))
     except (TypeError, ValueError):
         return 3
 

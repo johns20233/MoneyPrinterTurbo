@@ -31,6 +31,8 @@ MIN_SPEED = 0.6             # slowest playback used to stretch a short clip
 TRANSITION_SECONDS = 0.4
 MIN_SCENE_FOR_TRANSITION = 1.6
 ZOOM = 0.12                 # Ken Burns amplitude (12 %)
+FADE_IN_SECONDS = 0.25
+FADE_OUT_SECONDS = 0.8
 PRESCALE = 1.25             # render moves on a larger frame: smoother motion
 # Shots and the joined montage are intermediate files (the final step
 # re-encodes with subtitles), so they use fast presets with high quality.
@@ -274,6 +276,12 @@ def render(
 
         def compose(transitions: bool):
             graph, label = compose_filter(scenes, transitions=transitions)
+            # Soft opening and a smooth fade to black at the end (no abrupt cut).
+            length = total_duration or sum(scene["frames"] for scene in scenes) / FPS
+            fade_out = min(FADE_OUT_SECONDS, max(0.0, length / 4))
+            graph += (f";{label}fade=t=in:st=0:d={FADE_IN_SECONDS},"
+                      f"fade=t=out:st={max(0.0, length - fade_out):.3f}:d={fade_out:.3f}[final]")
+            label = "[final]"
             command = [utils.get_ffmpeg_binary(), "-y", "-loglevel", "error"]
             for f in files:
                 command += ["-i", f]

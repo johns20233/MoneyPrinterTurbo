@@ -21,7 +21,7 @@ _api_key_lock = threading.Lock()
 # PDFLibero scene sync: scenes searched/checked/downloaded in parallel.
 SCENE_DOWNLOAD_WORKERS = 6
 # PDFLibero scene sync: extra clips of a scene need a clearly relevant preview.
-SECOND_CLIP_MIN_SCORE = 7
+SECOND_CLIP_MIN_SCORE = 6
 
 
 def _safe_public_url(value: Any) -> str | None:
