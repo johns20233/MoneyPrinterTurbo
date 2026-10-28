@@ -13,8 +13,8 @@ the MoviePy path. Any failure raises; the caller falls back to the classic
 montage, so a paid render never depends on this module.
 """
 
-import json
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Sequence
@@ -209,23 +209,25 @@ def _run(command: List[str], stage: str) -> None:
     deadline.check(stage)
     left = deadline.remaining()
     timeout = None if left is None else max(5.0, left)
-    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout)
+    result = subprocess.run(command, capture_output=True, text=True, errors="replace", check=False, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"{stage} failed: {(result.stderr or '').strip()[-600:]}")
 
 
+_DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+
+
 def probe_length(path: str) -> float:
-    ffprobe = os.path.join(os.path.dirname(utils.get_ffmpeg_binary()), "ffprobe")
-    if not os.path.exists(ffprobe):
-        ffprobe = "ffprobe"
+    """Clip length read with ffmpeg itself (the server may have no ffprobe)."""
     result = subprocess.run(
-        [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "json", path],
-        capture_output=True, text=True, check=False, timeout=30,
+        [utils.get_ffmpeg_binary(), "-hide_banner", "-i", path],
+        capture_output=True, text=True, errors="replace", check=False, timeout=30,
     )
-    try:
-        return float(json.loads(result.stdout)["format"]["duration"])
-    except (ValueError, KeyError, TypeError):
+    match = _DURATION.search(result.stderr or "")
+    if not match:
         return 0.0
+    hours, minutes, seconds = match.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
 def render(
@@ -237,6 +239,12 @@ def render(
     total_duration: Optional[float] = None,
 ) -> str:
     output_dir = os.path.dirname(output_file)
+    try:
+        version = subprocess.run([utils.get_ffmpeg_binary(), "-version"], capture_output=True,
+                                 text=True, errors="replace", timeout=15).stdout.splitlines()[0]
+    except Exception:
+        version = "unknown"
+    logger.info(f"scene render using {utils.get_ffmpeg_binary()} ({version})")
     lengths = {}
     for clips in scene_clips:
         for path in clips:
