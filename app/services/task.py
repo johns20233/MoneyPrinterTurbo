@@ -13,7 +13,7 @@ from loguru import logger
 
 from app.config import config
 from app.models import const
-from app.models.schema import VideoConcatMode, VideoParams
+from app.models.schema import VideoAspect, VideoConcatMode, VideoParams
 from app.services import bgm as bgm_service
 from app.services import (
     elevenlabs_music,
@@ -588,6 +588,44 @@ def _config_flag(name: str, default: bool) -> bool:
     return bool(value)
 
 
+def _professional_finish(params, combined_video_path, audio_file, subtitle_path,
+                         final_video_path, bgm_file_override) -> bool:
+    """PDFLibero scene videos: title hook, word-by-word subtitles, ducked music."""
+    from app.services import scene_finish
+
+    try:
+        lines = []
+        if params.subtitle_enabled and subtitle_path and os.path.exists(subtitle_path):
+            lines = scene_service.parse_srt_entries(subtitle_service.file_to_subtitles(subtitle_path))
+        bgm_file = ""
+        if bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume):
+            bgm_file = (
+                bgm_file_override
+                if bgm_file_override is not None
+                else video.get_bgm_file(bgm_type=params.bgm_type, bgm_file=params.bgm_file)
+            )
+        title = " ".join(str(params.video_subject or "").split())
+        title = title[:1].upper() + title[1:] if 3 <= len(title) <= 70 else None
+        width, height = VideoAspect(params.video_aspect).to_resolution()
+        scene_finish.finish(
+            video_path=combined_video_path,
+            audio_path=audio_file,
+            subtitle_lines=lines,
+            output_file=final_video_path,
+            width=width,
+            height=height,
+            title=title,
+            bgm_file=bgm_file or None,
+            voice_volume=params.voice_volume,
+        )
+        return True
+    except deadline.TaskDeadlineExceeded:
+        raise
+    except Exception as exc:
+        logger.warning(f"professional finishing failed, using classic finishing: {type(exc).__name__}: {exc}")
+        return False
+
+
 def _scene_clips_per_term() -> int:
     """Different clips per scene for the FFmpeg scene montage (1 = classic)."""
     if not _scene_render_enabled():
@@ -791,14 +829,23 @@ def generate_final_videos(
                 warnings.append({"code": warning_code, "video_index": index})
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
-        bgm_mix_succeeded = video.generate_video(
-            video_path=combined_video_path,
-            audio_path=audio_file,
-            subtitle_path=subtitle_path,
-            output_file=final_video_path,
-            params=params,
-            bgm_file_override=bgm_file_override,
-        )
+        finished = False
+        if scene_durations and _config_flag("pro_finish", True):
+            finished = _professional_finish(
+                params, combined_video_path, audio_file, subtitle_path,
+                final_video_path, bgm_file_override,
+            )
+        if finished:
+            bgm_mix_succeeded = True
+        else:
+            bgm_mix_succeeded = video.generate_video(
+                video_path=combined_video_path,
+                audio_path=audio_file,
+                subtitle_path=subtitle_path,
+                output_file=final_video_path,
+                params=params,
+                bgm_file_override=bgm_file_override,
+            )
         if (
             video_music_provider is not None
             and bgm_file_override
