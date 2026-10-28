@@ -36,6 +36,8 @@ scene_sync_enabled = ${SCENE_SYNC:-true}
 scene_render_enabled = ${SCENE_RENDER:-true}
 scene_clips_per_term = ${SCENE_CLIPS_PER_TERM:-3}
 natural_voice = ${NATURAL_VOICE:-true}
+natural_voice_provider = "${NATURAL_VOICE_PROVIDER:-openai}"
+openai_tts_model = "${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}"
 
 sonilo_api_key = ""
 sonilo_base_url = "https://api.sonilo.com"

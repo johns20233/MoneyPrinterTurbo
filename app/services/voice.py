@@ -443,6 +443,9 @@ def tts(
         else:
             logger.error(f"Invalid chatterbox voice name format: {voice_name}")
             return None
+    natural_openai = _openai_natural_voice(text, voice_name, voice_rate, voice_file)
+    if natural_openai is not None:
+        return natural_openai
     natural = natural_voice_for(voice_name)
     if natural:
         sub_maker = azure_tts_v2(text, f"{natural}-V2", voice_file, voice_rate=voice_rate)
@@ -470,11 +473,55 @@ NATURAL_VOICES = {
 }
 
 
+def _natural_voice_provider() -> str:
+    value = config.app.get("natural_voice", False)
+    if isinstance(value, str):
+        value = value.strip().lower() in {"1", "true", "yes", "on"}
+    if not value:
+        return ""
+    return str(config.app.get("natural_voice_provider", "openai") or "openai").strip().lower()
+
+
+def _voice_gender(voice_name: str) -> str | None:
+    return next((v.get("gender") for v in _load_azure_voices() if v.get("name") == voice_name), None)
+
+
+def _openai_natural_voice(text, voice_name, voice_rate, voice_file):
+    """PDFLibero: OpenAI narration for standard Edge voices; None = not used."""
+    if _natural_voice_provider() != "openai" or not voice_name or len(voice_name.split("-")) < 3:
+        return None
+    if not config.app.get("openai_api_key", ""):
+        return None
+    from app.services import openai_voice
+
+    def lines_of(chunk):
+        return utils.split_string_by_punctuations(_format_text(chunk))
+
+    items = openai_voice.synthesize(
+        text, voice_name, _voice_gender(voice_name), voice_rate, voice_file, lines_of
+    )
+    if not items:
+        return None
+    sub_maker = ensure_legacy_submaker_fields(SubMaker())
+    expected = lines_of(text)
+    if [line for line, _, _ in items] == expected:
+        for line, start, end in items:
+            sub_maker.subs.append(line)
+            sub_maker.offset.append((int(start * 10000000), int(end * 10000000)))
+    else:
+        logger.warning("openai voice: subtitle lines differ, using proportional timing")
+        sub_maker = populate_legacy_submaker_with_full_text(sub_maker, text, items[-1][2])
+    logger.info(f"natural voice used: {voice_name} -> openai")
+    return sub_maker
+
+
 def natural_voice_for(voice_name: str) -> str | None:
     value = config.app.get("natural_voice", False)
     if isinstance(value, str):
         value = value.strip().lower() in {"1", "true", "yes", "on"}
     if not value or not voice_name or "Multilingual" in voice_name:
+        return None
+    if _natural_voice_provider() != "azure":
         return None
     if not config.azure.get("speech_key", "") or not config.azure.get("speech_region", ""):
         return None
