@@ -171,9 +171,15 @@ def scene_durations(
     for i in range(term_count):
         if i in owned:
             continue
+        # A scene without a clip is shared between its neighbours, so no
+        # single clip has to stay on screen for too long.
         previous = [p for p in present if p < i]
-        owner = previous[-1] if previous else present[0]
-        owned[owner] += spans[i]
+        following = [p for p in present if p > i]
+        if previous and following:
+            owned[previous[-1]] += spans[i] / 2
+            owned[following[0]] += spans[i] / 2
+        else:
+            owned[(previous or following)[-1 if previous else 0]] += spans[i]
 
     durations = [owned[i] for i in term_indices]
     # Very short scenes flash on screen; borrow time from the longest scene.

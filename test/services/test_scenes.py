@@ -43,7 +43,7 @@ class TestSceneTiming(unittest.TestCase):
         self.assertAlmostEqual(durations[2], 2.0, delta=0.15)
         self.assertAlmostEqual(durations[3], 3.0, delta=0.15)
 
-    def test_missing_clip_gives_time_to_previous_scene(self):
+    def test_missing_clip_is_shared_by_neighbours(self):
         srt = srt_for([(0, 2, "Ahorrar energía en casa es fácil."),
                        (2, 8, "Un primer consejo es instalar bombillas de bajo consumo, que duran mucho más."),
                        (8, 10, "Mantener las cortinas abiertas ayuda."),
@@ -51,7 +51,8 @@ class TestSceneTiming(unittest.TestCase):
         durations = scenes.scene_durations(SCRIPT, 4, [0, 1, 3], srt, 13.0)
         self.assertEqual(len(durations), 3)
         self.assertAlmostEqual(sum(durations), 13.0, places=2)
-        self.assertAlmostEqual(durations[1], 8.0, delta=0.2)  # scene 2 absorbs missing scene 3
+        self.assertAlmostEqual(durations[1], 7.0, delta=0.2)  # half of missing scene 3
+        self.assertAlmostEqual(durations[2], 4.0, delta=0.2)  # other half to the next scene
 
     def test_missing_first_clip_gives_time_to_next(self):
         durations = scenes.scene_durations(SCRIPT, 4, [1, 2, 3], [], 13.0)
