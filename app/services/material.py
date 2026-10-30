@@ -1021,8 +1021,21 @@ def download_one_clip_per_term(
         per_scene = [0] * len(search_terms)
         for index, _ in scenes:
             per_scene[index] += 1
-        generated = ai_images.fill_scenes(search_terms, per_scene, contexts, video_aspect, material_directory)
-        for index, clip_path in generated:
+        best_scores: list = [None] * len(search_terms)
+        for record in material_sources:
+            index, score = record.get("scene_index"), record.get("relevance_score")
+            if isinstance(index, int) and isinstance(score, int):
+                best_scores[index] = score if best_scores[index] is None else max(best_scores[index], score)
+        generated = ai_images.fill_scenes(
+            search_terms, per_scene, contexts, video_aspect, material_directory, best_scores
+        )
+        # Order inside a scene: AI image first when the stock clips were weak,
+        # otherwise after the stock clips.
+        order = {}
+        for position, (index, clip_path) in enumerate(scenes):
+            order[clip_path] = (index, 1, position)
+        for position, (index, clip_path) in enumerate(generated):
+            order[clip_path] = (index, 0 if ai_images.is_weak(best_scores[index]) else 2, position)
             scenes.append((index, clip_path))
             material_sources.append({
                 "provider": "ai_image",
@@ -1033,7 +1046,7 @@ def download_one_clip_per_term(
                 "scene_term": search_terms[index],
             })
         if generated:
-            scenes.sort(key=lambda pair: pair[0])
+            scenes.sort(key=lambda pair: order[pair[1]])
     except Exception as ai_error:
         logger.warning(f"AI scene images skipped: {type(ai_error).__name__}: {ai_error}")
 

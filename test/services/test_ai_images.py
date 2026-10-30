@@ -16,6 +16,17 @@ class TestAIImages(unittest.TestCase):
         picked = ai.pick_scenes(5, [1, 0, 2, 1, 0], ["corta", "", LONG, LONG + " extra", "x"], 6)
         self.assertEqual(picked, [1, 4, 3])
 
+    def test_weak_scenes_come_after_empty_ones_lowest_score_first(self):
+        picked = ai.pick_scenes(5, [0, 3, 2, 3, 1], ["", "a", "b", "c", LONG], 6, [None, 6, 9, 5, 8], 7)
+        self.assertEqual(picked, [0, 3, 1, 4])
+
+    def test_unscored_scenes_are_not_weak(self):
+        self.assertEqual(ai.pick_scenes(2, [2, 2], None, 6, [None, None], 7), [])
+        with mock.patch.dict(ai.config.app, {"ai_scene_images_weak_score": 7}):
+            self.assertTrue(ai.is_weak(6))
+            self.assertFalse(ai.is_weak(7))
+            self.assertFalse(ai.is_weak(None))
+
     def test_short_single_scenes_are_not_picked(self):
         self.assertEqual(ai.pick_scenes(2, [1, 1], ["hola que tal", "bien"], 6), [])
 

@@ -44,6 +44,7 @@ ai_scene_images = ${AI_SCENE_IMAGES:-false}
 ai_scene_images_max = ${AI_SCENE_IMAGES_MAX:-6}
 ai_scene_images_model = "${AI_SCENE_IMAGES_MODEL:-gpt-image-1}"
 ai_scene_images_quality = "${AI_SCENE_IMAGES_QUALITY:-medium}"
+ai_scene_images_weak_score = ${AI_SCENE_IMAGES_WEAK_SCORE:-7}
 
 sonilo_api_key = ""
 sonilo_base_url = "https://api.sonilo.com"
