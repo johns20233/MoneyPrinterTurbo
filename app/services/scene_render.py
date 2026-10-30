@@ -213,7 +213,12 @@ def _run(command: List[str], stage: str) -> None:
     timeout = None if left is None else max(5.0, left)
     result = subprocess.run(command, capture_output=True, text=True, errors="replace", check=False, timeout=timeout)
     if result.returncode != 0:
-        raise RuntimeError(f"{stage} failed: {(result.stderr or '').strip()[-600:]}")
+        error = (result.stderr or "").strip()
+        # Keep the line that explains the failure (FFmpeg prints the cause
+        # before the generic "Failed to configure output pad" line).
+        causes = [line for line in error.splitlines()
+                  if any(k in line.lower() for k in ("match", "invalid", "needs", "must", "error", "failed"))]
+        raise RuntimeError(f"{stage} failed: {' | '.join(causes)[-900:] or error[-600:]}")
 
 
 _DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")

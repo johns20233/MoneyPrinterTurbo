@@ -55,6 +55,41 @@ class TestAIImages(unittest.TestCase):
             made = ai.fill_scenes(["a", "b", "c"], [0, 3, 0], None, VideoAspect.portrait, "/tmp")
         self.assertEqual(made, [(0, "/tmp/a.mp4")])
 
+    def test_model_fallback_skips_unavailable_models(self):
+        calls = []
+
+        class Err(Exception):
+            status_code = 400
+
+        def fake_request(client, model, prompt, aspect):
+            calls.append(model)
+            if model != "dall-e-3":
+                raise Err("The model 'x' does not exist. invalid_value")
+            return "aGVsbG8="
+
+        ai._unavailable.clear()
+        with mock.patch.object(ai, "_request", side_effect=fake_request), \
+             mock.patch.object(ai, "_still_clip"), \
+             mock.patch("openai.OpenAI"), \
+             mock.patch.dict(ai.config.app, {"openai_api_key": "k", "ai_scene_images_model": ""}):
+            import tempfile
+            d = tempfile.mkdtemp()
+            self.assertTrue(ai.generate_clip("plug", "x", VideoAspect.portrait, d).endswith(".mp4"))
+            self.assertEqual(calls, ["gpt-image-1", "gpt-image-1-mini", "dall-e-3"])
+            calls.clear()
+            ai.generate_clip("plug", "x", VideoAspect.portrait, d)
+            self.assertEqual(calls, ["dall-e-3"])
+        ai._unavailable.clear()
+
+    def test_other_errors_do_not_fall_back(self):
+        ai._unavailable.clear()
+        with mock.patch.object(ai, "_request", side_effect=TimeoutError("slow")) as req, \
+             mock.patch("openai.OpenAI"), \
+             mock.patch.dict(ai.config.app, {"openai_api_key": "k"}):
+            self.assertIsNone(ai.generate_clip("plug", "x", VideoAspect.portrait, "/tmp"))
+            self.assertEqual(req.call_count, 1)
+        self.assertEqual(ai._unavailable, set())
+
     def test_no_key_means_disabled(self):
         with mock.patch.dict(ai.config.app, {"ai_scene_images": True, "openai_api_key": ""}):
             self.assertFalse(ai.enabled())

@@ -151,6 +151,40 @@ def _still_clip(image_path: str, out_path: str, width: int, height: int) -> None
         raise RuntimeError(f"still clip failed: {(result.stderr or '').strip()[-300:]}")
 
 
+# Models tried in order. gpt-image-1 / gpt-image-1-mini need a verified
+# OpenAI organisation; dall-e-3 works without it. A model the account cannot
+# use is remembered for the life of the process so it is not retried.
+FALLBACK_MODELS = ["gpt-image-1", "gpt-image-1-mini", "dall-e-3"]
+_unavailable: set = set()
+
+
+def _models() -> List[str]:
+    first = config.app.get("ai_scene_images_model", "") or DEFAULT_MODEL
+    ordered = [first] + [m for m in FALLBACK_MODELS if m != first]
+    return [m for m in ordered if m not in _unavailable]
+
+
+def _model_unavailable(error: Exception) -> bool:
+    text = str(error).lower()
+    status = getattr(error, "status_code", None)
+    return status in (403, 404) or "does not exist" in text or "must be verified" in text \
+        or "not have access" in text or ("model" in text and "invalid_value" in text)
+
+
+def _request(client, model: str, prompt: str, aspect: VideoAspect) -> str:
+    if model.startswith("dall-e"):
+        size = {"portrait": "1024x1792", "landscape": "1792x1024"}.get(aspect.name, "1024x1024")
+        response = client.images.generate(model=model, prompt=prompt[:3900], size=size,
+                                          quality="standard", response_format="b64_json", n=1)
+    else:
+        response = client.images.generate(model=model, prompt=prompt, size=_size(aspect),
+                                          quality=config.app.get("ai_scene_images_quality", "") or DEFAULT_QUALITY, n=1)
+    data = response.data[0].b64_json if response.data else None
+    if not data:
+        raise ValueError("empty image")
+    return data
+
+
 def generate_clip(term: str, narration: str, aspect: VideoAspect, directory: str) -> Optional[str]:
     """One AI image as a still MP4 clip, or None on any failure."""
     try:
@@ -161,16 +195,19 @@ def generate_clip(term: str, narration: str, aspect: VideoAspect, directory: str
             base_url=config.app.get("openai_base_url") or None,
             timeout=REQUEST_TIMEOUT,
         )
-        response = client.images.generate(
-            model=config.app.get("ai_scene_images_model", "") or DEFAULT_MODEL,
-            prompt=build_prompt(term, narration, aspect),
-            size=_size(aspect),
-            quality=config.app.get("ai_scene_images_quality", "") or DEFAULT_QUALITY,
-            n=1,
-        )
-        data = response.data[0].b64_json if response.data else None
+        prompt = build_prompt(term, narration, aspect)
+        data, used = None, None
+        for model in _models():
+            try:
+                data, used = _request(client, model, prompt, aspect), model
+                break
+            except Exception as e:
+                if not _model_unavailable(e):
+                    raise
+                _unavailable.add(model)
+                logger.warning(f"AI image model {model} not available for this account, trying the next one")
         if not data:
-            raise ValueError("empty image")
+            raise RuntimeError("no image model available for this OpenAI account")
         directory = directory or utils.storage_dir("cache_videos", create=True)
         os.makedirs(directory, exist_ok=True)
         name = f"ai-scene-{uuid.uuid4().hex[:12]}"
@@ -180,6 +217,7 @@ def generate_clip(term: str, narration: str, aspect: VideoAspect, directory: str
         width, height = _target(aspect)
         clip_path = os.path.join(directory, f"{name}.mp4")
         _still_clip(image_path, clip_path, width, height)
+        logger.info(f"AI scene image created with {used}: term={term!r}")
         return clip_path
     except Exception as e:
         logger.warning(f"AI scene image failed: term={term!r}, error={type(e).__name__}: {str(e)[:200]}")
