@@ -11,7 +11,7 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from app.config import config
 from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
-from app.services import deadline, material_cache, relevance, task_artifacts
+from app.services import ai_images, deadline, material_cache, relevance, task_artifacts
 from app.utils import utils
 
 # Thread-safe counter for API key rotation
@@ -1013,6 +1013,29 @@ def download_one_clip_per_term(
                     "failed to prepare scene material source record: "
                     f"error={type(source_error).__name__}, detail={source_error}"
                 )
+
+    # PDFLibero: AI images for scenes with no good stock clip, and for long
+    # scenes that would otherwise be a single clip (OFF unless enabled,
+    # capped per video, failures leave the scene unchanged).
+    try:
+        per_scene = [0] * len(search_terms)
+        for index, _ in scenes:
+            per_scene[index] += 1
+        generated = ai_images.fill_scenes(search_terms, per_scene, contexts, video_aspect, material_directory)
+        for index, clip_path in generated:
+            scenes.append((index, clip_path))
+            material_sources.append({
+                "provider": "ai_image",
+                "local_file": Path(clip_path).name,
+                "duration": ai_images.STILL_SECONDS,
+                "ai_generated": True,
+                "scene_index": index,
+                "scene_term": search_terms[index],
+            })
+        if generated:
+            scenes.sort(key=lambda pair: pair[0])
+    except Exception as ai_error:
+        logger.warning(f"AI scene images skipped: {type(ai_error).__name__}: {ai_error}")
 
     if not scenes and check_relevance:
         # Never fail a paid render only because every preview was rejected:

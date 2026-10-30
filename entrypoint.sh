@@ -40,6 +40,10 @@ pro_finish = ${PRO_FINISH:-true}
 natural_voice = ${NATURAL_VOICE:-true}
 natural_voice_provider = "${NATURAL_VOICE_PROVIDER:-openai}"
 openai_tts_model = "${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}"
+ai_scene_images = ${AI_SCENE_IMAGES:-false}
+ai_scene_images_max = ${AI_SCENE_IMAGES_MAX:-6}
+ai_scene_images_model = "${AI_SCENE_IMAGES_MODEL:-gpt-image-1}"
+ai_scene_images_quality = "${AI_SCENE_IMAGES_QUALITY:-medium}"
 
 sonilo_api_key = ""
 sonilo_base_url = "https://api.sonilo.com"
