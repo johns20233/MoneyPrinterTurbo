@@ -179,7 +179,9 @@ def compose_filter(scenes: List[dict], fps: int = FPS, transitions: bool = True)
         frames = scene["rendered"] if transitions else scene["frames"]
         parts.append(
             f"{inputs}concat=n={len(scene['shots'])}:v=1:a=0,fps={fps},"
-            f"trim=end_frame={frames},setpts=PTS-STARTPTS,format=yuv420p,settb=1/{fps}[s{s}]"
+            # fps= LAST: FFmpeg 7 setpts marks the frame rate unknown (1/0) and
+            # xfade then refuses the input ("needs to be a constant frame rate").
+            f"trim=end_frame={frames},setpts=PTS-STARTPTS,format=yuv420p,settb=1/{fps},fps={fps}[s{s}]"
         )
         labels.append(f"[s{s}]")
 
@@ -192,7 +194,7 @@ def compose_filter(scenes: List[dict], fps: int = FPS, transitions: bool = True)
         if transitions and previous["transition"]:
             parts.append(
                 f"{acc}{labels[s]}xfade=transition={previous['transition']}:"
-                f"duration={tf / fps:.4f}:offset={elapsed / fps:.4f},settb=1/{fps}{out}"
+                f"duration={tf / fps:.4f}:offset={elapsed / fps:.4f},settb=1/{fps},fps={fps}{out}"
             )
         else:
             parts.append(f"{acc}{labels[s]}concat=n=2:v=1:a=0,fps={fps},settb=1/{fps}{out}")
