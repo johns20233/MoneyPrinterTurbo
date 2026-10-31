@@ -63,7 +63,7 @@ class TestElevenLabsVoice(unittest.TestCase):
         self.assertEqual([i[0] for i in items], ["Apaga la luz", "Ahorra cada mes"])
         self.assertTrue(os.path.getsize(out) == 2000)
         self.assertIn("/david/with-timestamps", post.call_args[0][0])
-        self.assertEqual(post.call_args[1]["json"]["voice_settings"]["speed"], 1.0)
+        self.assertEqual(post.call_args[1]["json"]["voice_settings"]["speed"], 0.9)
 
     def test_http_error_returns_none(self):
         response = mock.Mock(status_code=401, text="bad key")

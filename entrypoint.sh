@@ -173,6 +173,7 @@ api_key = "${ELEVENLABS_API_KEY:-}"
 voice_male = "${ELEVENLABS_VOICE_MALE:-}"
 voice_female = "${ELEVENLABS_VOICE_FEMALE:-}"
 narration_model_id = "${ELEVENLABS_NARRATION_MODEL:-eleven_multilingual_v2}"
+narration_speed = "${ELEVENLABS_NARRATION_SPEED:-0.9}"
 model_id = "eleven_multilingual_v2"
 music_model_id = "music_v2"
 music_timeout = 600

@@ -97,7 +97,9 @@ def synthesize(
     if not text or not voice_id or not _cfg("api_key") or len(text) > MAX_CHARS:
         return None
     try:
-        speed = max(0.7, min(1.2, float(voice_rate or 1.0)))
+        # Base narrator pace (0.9 = calmer, more professional) times the user's rate.
+        base = float(_cfg("narration_speed", "0.9") or 0.9)
+        speed = round(max(0.7, min(1.2, base * float(voice_rate or 1.0))), 3)
     except (TypeError, ValueError):
         speed = 1.0
     payload = {
