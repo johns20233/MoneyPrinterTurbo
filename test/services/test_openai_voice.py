@@ -14,8 +14,8 @@ def lines_of(text):
 
 class TestOpenAIVoice(unittest.TestCase):
     def test_split_keeps_sentence_punctuation(self):
-        chunks = ov.split_chunks("Hola mundo. ¿Qué tal? Bien: gracias.\nFin")
-        self.assertEqual(chunks, ["Hola mundo.", "¿Qué tal?", "Bien:", "gracias.", "Fin"])
+        chunks = ov.split_chunks("Hola mundo. ¿Qué tal? Bien: gracias; adiós.\nFin")
+        self.assertEqual(chunks, ["Hola mundo.", "¿Qué tal?", "Bien: gracias; adiós.", "Fin"])
 
     def test_decimals_are_not_split(self):
         self.assertEqual(ov.split_chunks("Cuesta 2.5 euros. Listo."), ["Cuesta 2.5 euros.", "Listo."])

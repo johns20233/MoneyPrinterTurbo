@@ -23,7 +23,8 @@ from app.config import config
 from app.utils import utils
 
 MODEL = "gpt-4o-mini-tts"
-VOICES = {"Male": "ash", "Female": "coral"}
+# Newest, most natural voices first; the older ones are the fallback.
+VOICES = {"Male": ["cedar", "ash"], "Female": ["marin", "coral"]}
 SENTENCE_GAP = 0.22          # pause between sentences (seconds)
 WORKERS = 4
 REQUEST_TIMEOUT = 40
@@ -43,7 +44,8 @@ ACCENTS = {
     "pt-PT": "European Portuguese",
 }
 
-_SENTENCE_END = re.compile(r"(?<=[.!?…;:])\s+|\n+")
+# Split only at real sentence ends: cutting at ";" or ":" breaks the intonation.
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|\n+")
 _DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 
 
@@ -145,7 +147,7 @@ def synthesize(text: str, voice_name: str, gender: Optional[str], voice_rate: fl
         return None
     parts = voice_name.split("-")
     locale = "-".join(parts[:2]) if len(parts) >= 2 else "en-US"
-    voice = VOICES.get(gender or "", VOICES["Female"])
+    voices = VOICES.get(gender or "", VOICES["Female"])
 
     from openai import OpenAI
 
@@ -155,8 +157,17 @@ def synthesize(text: str, voice_name: str, gender: Optional[str], voice_rate: fl
     try:
         jobs = [(chunk, os.path.join(work, f"raw-{i:03d}.wav"), os.path.join(work, f"clean-{i:03d}.wav"))
                 for i, chunk in enumerate(chunks)]
-        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            durations = list(pool.map(lambda job: _speak(client, job[0], voice, locale, job[1], job[2]), jobs))
+        durations, voice = None, voices[0]
+        for voice in voices:
+            try:
+                with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                    durations = list(pool.map(
+                        lambda job: _speak(client, job[0], voice, locale, job[1], job[2]), jobs))
+                break
+            except Exception as exc:
+                logger.warning(f"openai voice {voice} failed, trying the next one: {str(exc)[:200]}")
+        if durations is None:
+            raise RuntimeError("no OpenAI voice available")
 
         # Join with even pauses; optional speed change for voice_rate.
         command = [_ffmpeg(), "-y", "-loglevel", "error"]

@@ -443,6 +443,9 @@ def tts(
         else:
             logger.error(f"Invalid chatterbox voice name format: {voice_name}")
             return None
+    natural_eleven = _elevenlabs_natural_voice(text, voice_name, voice_rate, voice_file)
+    if natural_eleven is not None:
+        return natural_eleven
     natural_openai = _openai_natural_voice(text, voice_name, voice_rate, voice_file)
     if natural_openai is not None:
         return natural_openai
@@ -484,6 +487,39 @@ def _natural_voice_provider() -> str:
 
 def _voice_gender(voice_name: str) -> str | None:
     return next((v.get("gender") for v in _load_azure_voices() if v.get("name") == voice_name), None)
+
+
+def _timed_submaker(items, text, lines_of, provider):
+    sub_maker = ensure_legacy_submaker_fields(SubMaker())
+    if [line for line, _, _ in items] == lines_of(text):
+        for line, start, end in items:
+            sub_maker.subs.append(line)
+            sub_maker.offset.append((int(start * 10000000), int(end * 10000000)))
+    else:
+        logger.warning(f"{provider} voice: subtitle lines differ, using proportional timing")
+        sub_maker = populate_legacy_submaker_with_full_text(sub_maker, text, items[-1][2])
+    return sub_maker
+
+
+def _elevenlabs_natural_voice(text, voice_name, voice_rate, voice_file):
+    """PDFLibero: ElevenLabs narration (whole script, exact timings); None = not used."""
+    if not _natural_voice_provider() or not voice_name or len(voice_name.split("-")) < 3:
+        return None
+    from app.services import elevenlabs_voice
+
+    gender = _voice_gender(voice_name)
+    if not elevenlabs_voice.enabled_for(gender):
+        return None
+
+    def lines_of(chunk):
+        return utils.split_string_by_punctuations(_format_text(chunk))
+
+    items = elevenlabs_voice.synthesize(text, gender, voice_rate, voice_file, lines_of)
+    if not items:
+        logger.warning(f"elevenlabs voice not used for {voice_name}, trying the OpenAI voice")
+        return None
+    logger.info(f"natural voice used: {voice_name} -> elevenlabs")
+    return _timed_submaker(items, text, lines_of, "elevenlabs")
 
 
 def _openai_natural_voice(text, voice_name, voice_rate, voice_file):
